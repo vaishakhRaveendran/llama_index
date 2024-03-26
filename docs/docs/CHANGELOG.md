@@ -1,5 +1,74 @@
 # ChangeLog
 
+## [2024-03-23]
+
+### `llama-index-core` [0.10.23]
+
+- Added `(a)predict_and_call()` function to base LLM class + openai + mistralai (#12188)
+- fixed bug with `wait()` in async agent streaming (#12187)
+
+### `llama-index-embeddings-alephalpha` [0.1.0]
+
+- Added alephalpha embeddings (#12149)
+
+### `llama-index-llms-alephalpha` [0.1.0]
+
+- Added alephalpha LLM (#12149)
+
+### `llama-index-llms-openai` [0.1.7]
+
+- fixed bug with `wait()` in async agent streaming (#12187)
+
+### `llama-index-readers-docugami` [0.1.4]
+
+- fixed import errors in docugami reader (#12154)
+
+### `llama-index-readers-file` [0.1.12]
+
+- fix PDFReader for remote fs (#12186)
+
+## [2024-03-21]
+
+### `llama-index-core` [0.10.22]
+
+- Updated docs backend from sphinx to mkdocs, added ALL api reference, some light re-org, better search (#11301)
+- Added async loading to `BaseReader` class (although its fake async for now) (#12156)
+- Fix path implementation for non-local FS in `SimpleDirectoryReader` (#12141)
+- add args/kwargs to spans, payloads for retrieval events, in instrumentation (#12147)
+- [react agent] Upon exception, say so, so that Agent can correct itself (#12137)
+
+### `llama-index-embeddings-together` [0.1.3]
+
+- Added rate limit handling (#12127)
+
+### `llama-index-graph-stores-neptune` [0.1.3]
+
+- Add Amazon Neptune Support as Graph Store (#12097)
+
+### `llama-index-llms-vllm` [0.1.7]
+
+- fix VllmServer to work without CUDA-required vllm core (#12003)
+
+### `llama-index-readers-s3` [0.1.4]
+
+- Use S3FS in S3Reader (#12061)
+
+### `llama-index-storage-docstore-postgres` [0.1.3]
+
+- Added proper kvstore dep (#12157)
+
+### `llama-index-storage-index-store-postgres` [0.1.3]
+
+- Added proper kvstore dep (#12157)
+
+### `llama-index-vector-stores-elasticsearch` [0.1.6]
+
+- fix unclosed session in es add function #12135
+
+### `llama-index-vector-stores-kbdai` [0.1.3]
+
+- Add support for `KDBAIVectorStore` (#11967)
+
 ## [2024-03-20]
 
 ### `llama-index-core` [0.10.21]

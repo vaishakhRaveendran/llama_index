@@ -13,7 +13,7 @@ For more detailed guides on how to use specific tools, check out our [tools modu
 - [Query Planning](../../../examples/agent/openai_agent_query_plan.ipynb)
 - [Context Retrieval Agent](../../../examples/agent/openai_agent_context_retrieval.ipynb)
 - [Recursive Retriever Agents](../../../examples/query_engine/recursive_retriever_agents.ipynb)
-- [Multi-Document Agents](../../../examples/agent/multi_document_agents.ipynb)
+- [Multi Document Agents](../../../examples/agent/multi_document_agents.ipynb)
 - [Agent Builder](../../../examples/agent/agent_builder.ipynb)
 - [Parallel Function Calling](../../../examples/agent/openai_agent_parallel_function_calling.ipynb)
 
@@ -27,6 +27,10 @@ For more detailed guides on how to use specific tools, check out our [tools modu
 
 - [ReAct Agent](../../../examples/agent/react_agent.ipynb)
 - [ReAct Agent with Query Engine Tools](../../../examples/agent/react_agent_with_query_engine.ipynb)
+
+## Function Calling Agents
+
+- [Mistral Agent](../../../examples/agent/mistral_agent.ipynb)
 
 ## Additional Agents (available on LlamaHub)
 
