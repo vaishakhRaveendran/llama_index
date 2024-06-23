@@ -31,6 +31,7 @@ from llama_index.core.types import BaseOutputParser, PydanticProgramMode
 from llama_index.core.llms.function_calling import FunctionCallingLLM
 from llama_index.llms.mistralai.utils import (
     is_mistralai_function_calling_model,
+    is_mistralai_code_model,
     mistralai_modelname_to_contextsize,
 )
 
@@ -143,6 +144,7 @@ class MistralAI(FunctionCallingLLM):
         completion_to_prompt: Optional[Callable[[str], str]] = None,
         pydantic_program_mode: PydanticProgramMode = PydanticProgramMode.DEFAULT,
         output_parser: Optional[BaseOutputParser] = None,
+        endpoint: Optional[str] = None,
     ) -> None:
         additional_kwargs = additional_kwargs or {}
         callback_manager = callback_manager or CallbackManager([])
@@ -155,15 +157,18 @@ class MistralAI(FunctionCallingLLM):
                 "You can either pass it in as an argument or set it `MISTRAL_API_KEY`."
             )
 
+        # Use the custom endpoint if provided, otherwise default to DEFAULT_MISTRALAI_ENDPOINT
+        endpoint = endpoint or DEFAULT_MISTRALAI_ENDPOINT
+
         self._client = MistralClient(
             api_key=api_key,
-            endpoint=DEFAULT_MISTRALAI_ENDPOINT,
+            endpoint=endpoint,
             timeout=timeout,
             max_retries=max_retries,
         )
         self._aclient = MistralAsyncClient(
             api_key=api_key,
-            endpoint=DEFAULT_MISTRALAI_ENDPOINT,
+            endpoint=endpoint,
             timeout=timeout,
             max_retries=max_retries,
         )
@@ -235,9 +240,9 @@ class MistralAI(FunctionCallingLLM):
             message=ChatMessage(
                 role=MessageRole.ASSISTANT,
                 content=response.choices[0].message.content,
-                additional_kwargs={"tool_calls": tool_calls}
-                if tool_calls is not None
-                else {},
+                additional_kwargs=(
+                    {"tool_calls": tool_calls} if tool_calls is not None else {}
+                ),
             ),
             raw=dict(response),
         )
@@ -297,9 +302,9 @@ class MistralAI(FunctionCallingLLM):
             message=ChatMessage(
                 role=MessageRole.ASSISTANT,
                 content=response.choices[0].message.content,
-                additional_kwargs={"tool_calls": tool_calls}
-                if tool_calls is not None
-                else {},
+                additional_kwargs=(
+                    {"tool_calls": tool_calls} if tool_calls is not None else {}
+                ),
             ),
             raw=dict(response),
         )
@@ -320,7 +325,7 @@ class MistralAI(FunctionCallingLLM):
         messages = to_mistral_chatmessage(messages)
         all_kwargs = self._get_all_kwargs(**kwargs)
 
-        response = await self._aclient.chat_stream(messages=messages, **all_kwargs)
+        response = self._aclient.chat_stream(messages=messages, **all_kwargs)
 
         async def gen() -> ChatResponseAsyncGen:
             content = ""
@@ -356,7 +361,9 @@ class MistralAI(FunctionCallingLLM):
     ) -> ChatResponse:
         """Predict and call the tool."""
         # misralai uses the same openai tool format
-        tool_specs = [tool.metadata.to_openai_tool() for tool in tools]
+        tool_specs = [
+            tool.metadata.to_openai_tool(skip_length_check=True) for tool in tools
+        ]
 
         if isinstance(user_msg, str):
             user_msg = ChatMessage(role=MessageRole.USER, content=user_msg)
@@ -385,7 +392,9 @@ class MistralAI(FunctionCallingLLM):
     ) -> ChatResponse:
         """Predict and call the tool."""
         # misralai uses the same openai tool format
-        tool_specs = [tool.metadata.to_openai_tool() for tool in tools]
+        tool_specs = [
+            tool.metadata.to_openai_tool(skip_length_check=True) for tool in tools
+        ]
 
         if isinstance(user_msg, str):
             user_msg = ChatMessage(role=MessageRole.USER, content=user_msg)
@@ -436,3 +445,24 @@ class MistralAI(FunctionCallingLLM):
             )
 
         return tool_selections
+
+    def fill_in_middle(
+        self, prompt: str, suffix: str, stop: Optional[List[str]] = None
+    ) -> CompletionResponse:
+        if not is_mistralai_code_model(self.model):
+            raise ValueError(
+                "Please provide code model from MistralAI. Currently supported code model is 'codestral-latest'."
+            )
+
+        if stop:
+            response = self._client.completion(
+                model=self.model, prompt=prompt, suffix=suffix, stop=stop
+            )
+        else:
+            response = self._client.completion(
+                model=self.model, prompt=prompt, suffix=suffix
+            )
+
+        return CompletionResponse(
+            text=response.choices[0].message.content, raw=dict(response)
+        )

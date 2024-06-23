@@ -30,6 +30,7 @@ from llama_index.core.schema import (
 from llama_index.core.service_context import ServiceContext
 from llama_index.core.settings import Settings
 from llama_index.core.utils import print_text
+from llama_index.core.instrumentation import DispatcherSpanMixin
 from llama_index.core.instrumentation.events.retrieval import (
     RetrievalEndEvent,
     RetrievalStartEvent,
@@ -39,7 +40,7 @@ import llama_index.core.instrumentation as instrument
 dispatcher = instrument.get_dispatcher(__name__)
 
 
-class BaseRetriever(ChainableMixin, PromptMixin):
+class BaseRetriever(ChainableMixin, PromptMixin, DispatcherSpanMixin):
     """Base retriever."""
 
     def __init__(
@@ -225,7 +226,11 @@ class BaseRetriever(ChainableMixin, PromptMixin):
 
         """
         self._check_callback_manager()
-        dispatcher.event(RetrievalStartEvent(str_or_query_bundle=str_or_query_bundle))
+        dispatcher.event(
+            RetrievalStartEvent(
+                str_or_query_bundle=str_or_query_bundle,
+            )
+        )
         if isinstance(str_or_query_bundle, str):
             query_bundle = QueryBundle(str_or_query_bundle)
         else:
@@ -241,14 +246,22 @@ class BaseRetriever(ChainableMixin, PromptMixin):
                     payload={EventPayload.NODES: nodes},
                 )
         dispatcher.event(
-            RetrievalEndEvent(str_or_query_bundle=str_or_query_bundle, nodes=nodes)
+            RetrievalEndEvent(
+                str_or_query_bundle=str_or_query_bundle,
+                nodes=nodes,
+            )
         )
         return nodes
 
     @dispatcher.span
     async def aretrieve(self, str_or_query_bundle: QueryType) -> List[NodeWithScore]:
         self._check_callback_manager()
-        dispatcher.event(RetrievalStartEvent(str_or_query_bundle=str_or_query_bundle))
+
+        dispatcher.event(
+            RetrievalStartEvent(
+                str_or_query_bundle=str_or_query_bundle,
+            )
+        )
         if isinstance(str_or_query_bundle, str):
             query_bundle = QueryBundle(str_or_query_bundle)
         else:
@@ -266,7 +279,10 @@ class BaseRetriever(ChainableMixin, PromptMixin):
                     payload={EventPayload.NODES: nodes},
                 )
         dispatcher.event(
-            RetrievalEndEvent(str_or_query_bundle=str_or_query_bundle, nodes=nodes)
+            RetrievalEndEvent(
+                str_or_query_bundle=str_or_query_bundle,
+                nodes=nodes,
+            )
         )
         return nodes
 

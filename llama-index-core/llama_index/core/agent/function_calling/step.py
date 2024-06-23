@@ -24,7 +24,7 @@ from llama_index.core.chat_engine.types import (
     AgentChatResponse,
 )
 from llama_index.core.base.llms.types import ChatMessage
-from llama_index.core.llms.llm import LLM, ToolSelection
+from llama_index.core.llms.function_calling import FunctionCallingLLM, ToolSelection
 from llama_index.core.memory import BaseMemory, ChatMemoryBuffer
 from llama_index.core.objects.base import ObjectRetriever
 from llama_index.core.settings import Settings
@@ -33,9 +33,8 @@ from llama_index.core.tools.calling import (
     call_tool_with_selection,
     acall_tool_with_selection,
 )
-from llama_index.llms.openai import OpenAI
 from llama_index.core.tools import BaseTool, ToolOutput, adapt_to_async_tool
-from llama_index.core.tools.types import AsyncBaseTool
+from llama_index.core.tools.types import AsyncBaseTool, ToolMetadata
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.WARNING)
@@ -43,12 +42,42 @@ logger.setLevel(logging.WARNING)
 DEFAULT_MAX_FUNCTION_CALLS = 5
 
 
-def get_function_by_name(tools: List[BaseTool], name: str) -> BaseTool:
-    """Get function by name."""
+def get_function_by_name(tools: List[BaseTool], name: str) -> Optional[BaseTool]:
+    """Get function by name. If the function is not found, None is returned."""
     name_to_tool = {tool.metadata.name: tool for tool in tools}
-    if name not in name_to_tool:
-        raise ValueError(f"Tool with name {name} not found")
-    return name_to_tool[name]
+    return name_to_tool.get(name, None)
+
+
+def build_missing_tool_message(missing_tool_name: str) -> str:
+    """
+    Build an error message for the case where a tool is not found. This message
+    instructs the LLM to double check the tool name, since it was hallucinated.
+    """
+    return f"Tool with name {missing_tool_name} not found, please double check."
+
+
+def build_error_tool_output(tool_name: str, tool_args: Any, err_msg: str) -> ToolOutput:
+    """Build a ToolOutput for an error that has occurred."""
+    return ToolOutput(
+        content=err_msg,
+        tool_name=tool_name,
+        raw_input={"args": str(tool_args)},
+        raw_output=err_msg,
+        is_error=True,
+    )
+
+
+def build_missing_tool_output(bad_tool_call: ToolSelection) -> ToolOutput:
+    """
+    Build a ToolOutput for the case where a tool is not found. This output contains
+    instructions that ask the LLM to double check the tool name, along with the
+    hallucinated tool name itself.
+    """
+    return build_error_tool_output(
+        bad_tool_call.tool_name,
+        bad_tool_call.tool_kwargs,
+        build_missing_tool_message(bad_tool_call.tool_name),
+    )
 
 
 class FunctionCallingAgentWorker(BaseAgentWorker):
@@ -57,7 +86,7 @@ class FunctionCallingAgentWorker(BaseAgentWorker):
     def __init__(
         self,
         tools: List[BaseTool],
-        llm: OpenAI,
+        llm: FunctionCallingLLM,
         prefix_messages: List[ChatMessage],
         verbose: bool = False,
         max_function_calls: int = 5,
@@ -93,7 +122,7 @@ class FunctionCallingAgentWorker(BaseAgentWorker):
         cls,
         tools: Optional[List[BaseTool]] = None,
         tool_retriever: Optional[ObjectRetriever[BaseTool]] = None,
-        llm: Optional[LLM] = None,
+        llm: Optional[FunctionCallingLLM] = None,
         verbose: bool = False,
         max_function_calls: int = DEFAULT_MAX_FUNCTION_CALLS,
         callback_manager: Optional[CallbackManager] = None,
@@ -160,7 +189,7 @@ class FunctionCallingAgentWorker(BaseAgentWorker):
     def get_all_messages(self, task: Task) -> List[ChatMessage]:
         return (
             self.prefix_messages
-            + task.memory.get()
+            + task.memory.get(input=task.input)
             + task.extra_state["new_memory"].get_all()
         )
 
@@ -171,49 +200,24 @@ class FunctionCallingAgentWorker(BaseAgentWorker):
         memory: BaseMemory,
         sources: List[ToolOutput],
         verbose: bool = False,
-    ) -> None:
+    ) -> bool:
+        tool = get_function_by_name(tools, tool_call.tool_name)
+
         with self.callback_manager.event(
             CBEventType.FUNCTION_CALL,
             payload={
                 EventPayload.FUNCTION_CALL: json.dumps(tool_call.tool_kwargs),
-                EventPayload.TOOL: get_function_by_name(
-                    tools, tool_call.tool_name
-                ).metadata,
+                EventPayload.TOOL: (
+                    tool.metadata
+                    if tool is not None
+                    else ToolMetadata(description="", name=tool_call.tool_name)
+                ),
             },
         ) as event:
-            tool_output = call_tool_with_selection(tool_call, tools, verbose=verbose)
-            event.on_end(payload={EventPayload.FUNCTION_OUTPUT: str(tool_output)})
-
-        function_message = ChatMessage(
-            content=str(tool_output),
-            role=MessageRole.TOOL,
-            additional_kwargs={
-                "name": tool_call.tool_name,
-                "tool_call_id": tool_call.tool_id,
-            },
-        )
-        sources.append(tool_output)
-        memory.put(function_message)
-
-    async def _acall_function(
-        self,
-        tools: List[BaseTool],
-        tool_call: ToolSelection,
-        memory: BaseMemory,
-        sources: List[ToolOutput],
-        verbose: bool = False,
-    ) -> None:
-        with self.callback_manager.event(
-            CBEventType.FUNCTION_CALL,
-            payload={
-                EventPayload.FUNCTION_CALL: json.dumps(tool_call.tool_kwargs),
-                EventPayload.TOOL: get_function_by_name(
-                    tools, tool_call.tool_name
-                ).metadata,
-            },
-        ) as event:
-            tool_output = await acall_tool_with_selection(
-                tool_call, tools, verbose=verbose
+            tool_output = (
+                call_tool_with_selection(tool_call, tools, verbose=verbose)
+                if tool is not None
+                else build_missing_tool_output(tool_call)
             )
             event.on_end(payload={EventPayload.FUNCTION_OUTPUT: str(tool_output)})
 
@@ -227,6 +231,49 @@ class FunctionCallingAgentWorker(BaseAgentWorker):
         )
         sources.append(tool_output)
         memory.put(function_message)
+
+        return tool.metadata.return_direct if tool is not None else False
+
+    async def _acall_function(
+        self,
+        tools: List[BaseTool],
+        tool_call: ToolSelection,
+        memory: BaseMemory,
+        sources: List[ToolOutput],
+        verbose: bool = False,
+    ) -> bool:
+        tool = get_function_by_name(tools, tool_call.tool_name)
+
+        with self.callback_manager.event(
+            CBEventType.FUNCTION_CALL,
+            payload={
+                EventPayload.FUNCTION_CALL: json.dumps(tool_call.tool_kwargs),
+                EventPayload.TOOL: (
+                    tool.metadata
+                    if tool is not None
+                    else ToolMetadata(description="", name=tool_call.tool_name)
+                ),
+            },
+        ) as event:
+            tool_output = (
+                await acall_tool_with_selection(tool_call, tools, verbose=verbose)
+                if tool is not None
+                else build_missing_tool_output(tool_call)
+            )
+            event.on_end(payload={EventPayload.FUNCTION_OUTPUT: str(tool_output)})
+
+        function_message = ChatMessage(
+            content=str(tool_output),
+            role=MessageRole.TOOL,
+            additional_kwargs={
+                "name": tool_call.tool_name,
+                "tool_call_id": tool_call.tool_id,
+            },
+        )
+        sources.append(tool_output)
+        memory.put(function_message)
+
+        return tool.metadata.return_direct if tool is not None else False
 
     @trace_method("run_step")
     def run_step(self, step: TaskStep, task: Task, **kwargs: Any) -> TaskStepOutput:
@@ -249,6 +296,11 @@ class FunctionCallingAgentWorker(BaseAgentWorker):
         tool_calls = self._llm.get_tool_calls_from_response(
             response, error_on_no_tool_call=False
         )
+
+        if self._verbose and response.message.content:
+            print("=== LLM Response ===")
+            print(str(response.message.content))
+
         if not self.allow_parallel_tool_calls and len(tool_calls) > 1:
             raise ValueError(
                 "Parallel tool calls not supported for synchronous function calling agent"
@@ -265,26 +317,46 @@ class FunctionCallingAgentWorker(BaseAgentWorker):
             new_steps = []
         else:
             is_done = False
-            for tool_call in tool_calls:
+            for i, tool_call in enumerate(tool_calls):
                 # TODO: maybe execute this with multi-threading
-                self._call_function(
+                return_direct = self._call_function(
                     tools,
                     tool_call,
                     task.extra_state["new_memory"],
                     task.extra_state["sources"],
                     verbose=self._verbose,
                 )
+
                 task.extra_state["n_function_calls"] += 1
+
+                # check if any of the tools return directly -- only works if there is one tool call
+                if i == 0 and return_direct:
+                    is_done = True
+                    response = task.extra_state["sources"][-1].content
+                    break
+
             # put tool output in sources and memory
-            new_steps = [
-                step.get_next_step(
-                    step_id=str(uuid.uuid4()),
-                    # NOTE: input is unused
-                    input=None,
-                )
-            ]
+            new_steps = (
+                [
+                    step.get_next_step(
+                        step_id=str(uuid.uuid4()),
+                        # NOTE: input is unused
+                        input=None,
+                    )
+                ]
+                if not is_done
+                else []
+            )
+
+        # get response string
+        # return_direct can change the response type
+        try:
+            response_str = str(response.message.content)
+        except AttributeError:
+            response_str = str(response)
+
         agent_response = AgentChatResponse(
-            response=str(response), sources=task.extra_state["sources"]
+            response=response_str, sources=task.extra_state["sources"]
         )
 
         return TaskStepOutput(
@@ -317,6 +389,11 @@ class FunctionCallingAgentWorker(BaseAgentWorker):
         tool_calls = self._llm.get_tool_calls_from_response(
             response, error_on_no_tool_call=False
         )
+
+        if self._verbose and response.message.content:
+            print("=== LLM Response ===")
+            print(str(response.message.content))
+
         if not self.allow_parallel_tool_calls and len(tool_calls) > 1:
             raise ValueError(
                 "Parallel tool calls not supported for synchronous function calling agent"
@@ -343,18 +420,36 @@ class FunctionCallingAgentWorker(BaseAgentWorker):
                 )
                 for tool_call in tool_calls
             ]
-            await asyncio.gather(*tasks)
+            return_directs = await asyncio.gather(*tasks)
+
+            # check if any of the tools return directly -- only works if there is one tool call
+            if len(return_directs) == 1 and return_directs[0]:
+                is_done = True
+                response = task.extra_state["sources"][-1].content
+
             task.extra_state["n_function_calls"] += len(tool_calls)
             # put tool output in sources and memory
-            new_steps = [
-                step.get_next_step(
-                    step_id=str(uuid.uuid4()),
-                    # NOTE: input is unused
-                    input=None,
-                )
-            ]
+            new_steps = (
+                [
+                    step.get_next_step(
+                        step_id=str(uuid.uuid4()),
+                        # NOTE: input is unused
+                        input=None,
+                    )
+                ]
+                if not is_done
+                else []
+            )
+
+        # get response string
+        # return_direct can change the response type
+        try:
+            response_str = str(response.message.content)
+        except AttributeError:
+            response_str = str(response)
+
         agent_response = AgentChatResponse(
-            response=str(response), sources=task.extra_state["sources"]
+            response=response_str, sources=task.extra_state["sources"]
         )
 
         return TaskStepOutput(

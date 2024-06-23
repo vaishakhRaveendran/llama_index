@@ -58,6 +58,8 @@ def validate_and_convert_stringable(input: Any) -> str:
         return str(new_input_list)
     elif isinstance(input, ChatResponse):
         return input.message.content or ""
+    elif isinstance(input, NodeWithScore) and isinstance(input.node, TextNode):
+        return input.get_content()
     elif isinstance(input, get_args(StringableInput)):
         return str(input)
     else:
@@ -107,8 +109,8 @@ class OutputKeys(BaseModel):
     def from_keys(
         cls,
         required_keys: Set[str],
-    ) -> "InputKeys":
-        """Create InputKeys from tuple."""
+    ) -> "OutputKeys":
+        """Create OutputKeys from tuple."""
         return cls(required_keys=required_keys)
 
     def validate(self, input_keys: Set[str]) -> None:
@@ -331,6 +333,28 @@ class Link(BaseModel):
             condition_fn=condition_fn,
             input_fn=input_fn,
         )
+
+
+class ComponentIntermediates:
+    """Component intermediate inputs and outputs."""
+
+    def __init__(
+        self,
+        inputs: Dict[str, Any],
+        outputs: Dict[str, Any],
+    ) -> None:
+        """Initialize."""
+        self.inputs = inputs
+        self.outputs = outputs
+
+    def __repr__(self) -> str:
+        return (
+            f"ComponentIntermediates(inputs={self.inputs!s}, "
+            f"outputs={self.outputs!s})"
+        )
+
+    def __str__(self) -> str:
+        return self.__repr__()
 
 
 # accept both QueryComponent and ChainableMixin as inputs to query pipeline

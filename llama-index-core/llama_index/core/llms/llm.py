@@ -51,6 +51,9 @@ from llama_index.core.types import (
 )
 from llama_index.core.instrumentation.events.llm import (
     LLMPredictEndEvent,
+    LLMPredictStartEvent,
+    LLMStructuredPredictEndEvent,
+    LLMStructuredPredictStartEvent,
 )
 
 import llama_index.core.instrumentation as instrument
@@ -286,6 +289,7 @@ class LLM(BaseLLM):
 
     # -- Structured outputs --
 
+    @dispatcher.span
     def structured_predict(
         self,
         output_cls: BaseModel,
@@ -322,6 +326,11 @@ class LLM(BaseLLM):
         """
         from llama_index.core.program.utils import get_program_for_llm
 
+        dispatcher.event(
+            LLMStructuredPredictStartEvent(
+                output_cls=output_cls, template=prompt, template_args=prompt_args
+            )
+        )
         program = get_program_for_llm(
             output_cls,
             prompt,
@@ -329,8 +338,11 @@ class LLM(BaseLLM):
             pydantic_program_mode=self.pydantic_program_mode,
         )
 
-        return program(**prompt_args)
+        result = program(**prompt_args)
+        dispatcher.event(LLMStructuredPredictEndEvent(output=result))
+        return result
 
+    @dispatcher.span
     async def astructured_predict(
         self,
         output_cls: BaseModel,
@@ -367,6 +379,12 @@ class LLM(BaseLLM):
         """
         from llama_index.core.program.utils import get_program_for_llm
 
+        dispatcher.event(
+            LLMStructuredPredictStartEvent(
+                output_cls=output_cls, template=prompt, template_args=prompt_args
+            )
+        )
+
         program = get_program_for_llm(
             output_cls,
             prompt,
@@ -374,7 +392,9 @@ class LLM(BaseLLM):
             pydantic_program_mode=self.pydantic_program_mode,
         )
 
-        return await program.acall(**prompt_args)
+        result = await program.acall(**prompt_args)
+        dispatcher.event(LLMStructuredPredictEndEvent(output=result))
+        return result
 
     # -- Prompt Chaining --
 
@@ -404,6 +424,9 @@ class LLM(BaseLLM):
             print(output)
             ```
         """
+        dispatcher.event(
+            LLMPredictStartEvent(template=prompt, template_args=prompt_args)
+        )
         self._log_template_data(prompt, **prompt_args)
 
         if self.metadata.is_chat_model:
@@ -414,10 +437,11 @@ class LLM(BaseLLM):
             formatted_prompt = self._get_prompt(prompt, **prompt_args)
             response = self.complete(formatted_prompt, formatted=True)
             output = response.text
+        parsed_output = self._parse_output(output)
+        dispatcher.event(LLMPredictEndEvent(output=parsed_output))
+        return parsed_output
 
-        dispatcher.event(LLMPredictEndEvent())
-        return self._parse_output(output)
-
+    @dispatcher.span
     def stream(
         self,
         prompt: BasePromptTemplate,
@@ -446,6 +470,9 @@ class LLM(BaseLLM):
         """
         self._log_template_data(prompt, **prompt_args)
 
+        dispatcher.event(
+            LLMPredictStartEvent(template=prompt, template_args=prompt_args)
+        )
         if self.metadata.is_chat_model:
             messages = self._get_messages(prompt, **prompt_args)
             chat_response = self.stream_chat(messages)
@@ -486,6 +513,9 @@ class LLM(BaseLLM):
             print(output)
             ```
         """
+        dispatcher.event(
+            LLMPredictStartEvent(template=prompt, template_args=prompt_args)
+        )
         self._log_template_data(prompt, **prompt_args)
 
         if self.metadata.is_chat_model:
@@ -497,9 +527,11 @@ class LLM(BaseLLM):
             response = await self.acomplete(formatted_prompt, formatted=True)
             output = response.text
 
-        dispatcher.event(LLMPredictEndEvent())
-        return self._parse_output(output)
+        parsed_output = self._parse_output(output)
+        dispatcher.event(LLMPredictEndEvent(output=parsed_output))
+        return parsed_output
 
+    @dispatcher.span
     async def astream(
         self,
         prompt: BasePromptTemplate,
@@ -528,6 +560,9 @@ class LLM(BaseLLM):
         """
         self._log_template_data(prompt, **prompt_args)
 
+        dispatcher.event(
+            LLMPredictStartEvent(template=prompt, template_args=prompt_args)
+        )
         if self.metadata.is_chat_model:
             messages = self._get_messages(prompt, **prompt_args)
             chat_response = await self.astream_chat(messages)
@@ -544,6 +579,7 @@ class LLM(BaseLLM):
 
         return stream_tokens
 
+    @dispatcher.span
     def predict_and_call(
         self,
         tools: List["BaseTool"],
@@ -560,6 +596,7 @@ class LLM(BaseLLM):
         """
         from llama_index.core.agent.react import ReActAgentWorker
         from llama_index.core.agent.types import Task
+        from llama_index.core.chat_engine.types import AgentChatResponse
         from llama_index.core.memory import ChatMemoryBuffer
 
         worker = ReActAgentWorker(
@@ -595,6 +632,7 @@ class LLM(BaseLLM):
 
         return output
 
+    @dispatcher.span
     async def apredict_and_call(
         self,
         tools: List["BaseTool"],
@@ -606,6 +644,7 @@ class LLM(BaseLLM):
         """Predict and call the tool."""
         from llama_index.core.agent.react import ReActAgentWorker
         from llama_index.core.agent.types import Task
+        from llama_index.core.chat_engine.types import AgentChatResponse
         from llama_index.core.memory import ChatMemoryBuffer
 
         worker = ReActAgentWorker(

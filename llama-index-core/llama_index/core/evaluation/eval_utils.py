@@ -4,24 +4,22 @@ NOTE: These are beta functions, might change.
 
 """
 
-import asyncio
-import os
 import subprocess
 import tempfile
 from collections import defaultdict
-from typing import Any, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 
-from llama_index_client import ProjectCreate
-from llama_index_client.client import PlatformApi
-from llama_index_client.types.eval_question_create import EvalQuestionCreate
+from llama_cloud import ProjectCreate
+from llama_cloud.types.eval_question_create import EvalQuestionCreate
 
-from llama_index.core.async_utils import asyncio_module
+from llama_index.core.async_utils import asyncio_module, asyncio_run
 from llama_index.core.base.base_query_engine import BaseQueryEngine
-from llama_index.core.constants import DEFAULT_BASE_URL, DEFAULT_PROJECT_NAME
+from llama_index.core.constants import DEFAULT_PROJECT_NAME
 from llama_index.core.evaluation.base import EvaluationResult
+from llama_index.core.ingestion.api_utils import get_client
 
 if TYPE_CHECKING:
     from llama_index.core.llama_dataset import LabelledRagDataset
@@ -47,7 +45,7 @@ def get_responses(
     Sync version of aget_responses.
 
     """
-    return asyncio.run(aget_responses(*args, **kwargs))
+    return asyncio_run(aget_responses(*args, **kwargs))
 
 
 def get_results_df(
@@ -111,17 +109,12 @@ def upload_eval_dataset(
             "Must supply either a list of `questions`, or a `llama_dataset_id` to import from llama-hub."
         )
 
-    base_url = base_url or os.environ.get("LLAMA_CLOUD_BASE_URL", DEFAULT_BASE_URL)
-    assert base_url is not None
+    client = get_client(base_url=base_url, api_key=api_key)
 
-    api_key = api_key or os.environ.get("LLAMA_CLOUD_API_KEY", None)
-
-    client = PlatformApi(base_url=base_url, token=api_key)
-
-    project = client.project.upsert_project(request=ProjectCreate(name=project_name))
+    project = client.projects.upsert_project(request=ProjectCreate(name=project_name))
     assert project.id is not None
 
-    existing_datasets = client.project.get_datasets_for_project(project_id=project.id)
+    existing_datasets = client.projects.get_datasets_for_project(project_id=project.id)
 
     # check if dataset already exists
     cur_dataset = None
@@ -129,7 +122,7 @@ def upload_eval_dataset(
         if dataset.name == dataset_name:
             if overwrite:
                 assert dataset.id is not None
-                client.eval.delete_dataset(dataset_id=dataset.id)
+                client.evals.delete_dataset(dataset_id=dataset.id)
                 break
             elif not append:
                 raise ValueError(
@@ -142,7 +135,7 @@ def upload_eval_dataset(
 
     # either create new dataset or use existing one
     if cur_dataset is None:
-        eval_dataset = client.project.create_eval_dataset_for_project(
+        eval_dataset = client.projects.create_eval_dataset_for_project(
             project_id=project.id, name=dataset_name
         )
     else:
@@ -159,7 +152,7 @@ def upload_eval_dataset(
         rag_dataset = _download_llama_dataset_from_hub(llama_dataset_id)
         questions = [example.query for example in rag_dataset[:]]
 
-    eval_questions = client.eval.create_questions(
+    eval_questions = client.evals.create_questions(
         dataset_id=eval_dataset.id,
         request=[EvalQuestionCreate(content=q) for q in questions],
     )
@@ -167,6 +160,46 @@ def upload_eval_dataset(
     assert len(eval_questions) == len(questions)
     print(f"Uploaded {len(questions)} questions to dataset {dataset_name}")
     return eval_dataset.id
+
+
+def upload_eval_results(
+    project_name: str, app_name: str, results: Dict[str, List[EvaluationResult]]
+) -> None:
+    """Upload the evaluation results to LlamaCloud.
+
+    Args:
+        project_name (str): The name of the project.
+        app_name (str): The name of the app.
+        results (Dict[str, List[EvaluationResult]]):
+            The evaluation results, a mapping of metric name to a list of EvaluationResult objects.
+
+    Examples:
+        ```python
+        from llama_index.core.evaluation.eval_utils import upload_eval_results
+
+        result = evaluator.evaluate(...)
+        upload_eval_results(
+            project_name="my_project",
+            app_name="my_app",
+            results={"evaluator_name": [result]}
+        )
+        ```
+    """
+    client = get_client()
+
+    project = client.projects.upsert_project(request=ProjectCreate(name=project_name))
+    assert project.id is not None
+
+    client.projects.create_local_eval_set_for_project(
+        project_id=project.id,
+        app_name=app_name,
+        results=results,
+    )
+
+    for key, val in results.items():
+        print(
+            f"Uploaded {len(val)} results for metric {key} under project {project_name}/{app_name}."
+        )
 
 
 def default_parser(eval_response: str) -> Tuple[Optional[float], Optional[str]]:
@@ -179,7 +212,16 @@ def default_parser(eval_response: str) -> Tuple[Optional[float], Optional[str]]:
     Returns:
         Tuple[float, str]: A tuple containing the score as a float and the reasoning as a string.
     """
+    if not eval_response.strip():
+        # Return None or default values if the response is empty
+        return None, "No response"
+
     score_str, reasoning_str = eval_response.split("\n", 1)
-    score = float(score_str)
+
+    try:
+        score = float(score_str)
+    except ValueError:
+        score = None
+
     reasoning = reasoning_str.lstrip("\n")
     return score, reasoning
